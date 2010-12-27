@@ -289,9 +289,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-WITH results AS (select * from xapian('book_idx', 'lord'))
-SELECT id, title, relevance from results join book on book.doc_id=document_id;
-
 */
 
 

@@ -1,0 +1,24 @@
+install.php
+  - "CREATE TYPE xapian_document" complains when it already exists.
+  - Add "CREATE FUNCTION xapian" on install.
+
+xapian.cpp
+  - Create xapian_update_document().
+  - Create xapian_delete_document().
+  - Add UPDATE and DELETE triggers when creating an index.
+  - When creating an index scan through to find NULL document_ids and index them.
+  - Add xapian_reindex().
+  - xapian_drop_index() needs to remove the triggers.
+  - Raise exception when xapian_create_index() name collides with an already present index.
+  - Raise exception when using any index function with an index that does not exist.
+  - xapian_document.relevance should be float?
+
+Documentation
+  - Fix up doc/index.html with contents and object index.
+
+SQL
+  - xapian() needs a synomymous function to specify a limit of results.
+
+Future
+  - A way to use multiple columns in an index with weightings, perhaps like:
+    title=2;content
