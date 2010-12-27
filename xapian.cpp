@@ -6,7 +6,8 @@ extern "C" {
 	#include <postgres.h>
 	#include <fmgr.h>
 	#include <funcapi.h>
-	
+	#include <executor/spi.h>
+		
 	#undef using
 	#undef typeid
 	#undef typename
@@ -67,16 +68,156 @@ extern "C" Datum pg_xapian_version(PG_FUNCTION_ARGS)
 }
 
 
-//@ boolean xapian_create_index(text)
+char *xapian_get_index_path(char *name)
+{
+	char sql[256];
+	sprintf(sql, "SELECT path FROM xapian_index WHERE name='%s'", name);
+	if(SPI_execute(sql, true, 1) != SPI_OK_SELECT) {
+		elog(ERROR, "\"%s\" failed", SPI_tuptable->alloced);
+		return NULL;
+	}
+	return SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
+}
+
+
+//@ void xapian_drop_index(text)
+extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_drop_index); }
+extern "C" Datum pg_xapian_drop_index(PG_FUNCTION_ARGS)
+{
+	char *name = PG_GETARG_NTSTRING(0);
+	char sql[1024];
+	SPI_connect();
+	
+	// we need the path before we remove the index
+	char *path = xapian_get_index_path(name);
+	
+	// drop index entry
+	sprintf(sql, "DELETE FROM xapian_index WHERE name='%s'", name);
+	SPI_execute(sql, false, 1);
+	
+	// delete data files
+	sprintf(sql, "rm -Rf \"%s\"", path);
+	system(sql);
+	
+	// clean up
+	SPI_finish();
+	PG_RETURN_NULL();
+}
+
+
+int xapian_trigger_exists(char *name)
+{
+	char sql[256];
+	sprintf(sql, "SELECT count(*) FROM pg_trigger WHERE tgname='%s'", name);
+	if(SPI_execute(sql, true, 1) != SPI_OK_SELECT) {
+		elog(ERROR, "SELECT count(*) FROM pg_trigger WHERE tgname='%s'", name);
+		return 0;
+	}
+	return atoi(SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1));
+}
+
+
+int xapian_table_exists(char *table)
+{
+	char sql[256];
+	sprintf(sql, "SELECT count(*) FROM pg_tables WHERE tablename='%s'", table);
+	if(SPI_execute(sql, true, 1) != SPI_OK_SELECT) {
+		elog(ERROR, "SELECT count(*) FROM pg_tables WHERE tablename='%s'", table);
+		return 0;
+	}
+	return atoi(SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1));
+}
+
+
+void xapian_create_system_tables()
+{
+	// check if the tables already exist
+	if(xapian_table_exists((char*) "xapian_index"))
+		return;
+	
+	SPI_execute(
+		"CREATE TABLE xapian_index ("
+		"  name TEXT NOT NULL,"
+		"  path TEXT NOT NULL,"
+		"  table_name TEXT NOT NULL,"
+		"  table_id TEXT NOT NULL,"
+		"  table_data TEXT NOT NULL"
+		")",
+	false, 1);
+	SPI_execute(
+		"CREATE UNIQUE INDEX xapian_index_name ON xapian_index (name)",
+	false, 1);
+}
+
+
+void xapian_drop_trigger(char *name, char *table)
+{
+	if(!xapian_trigger_exists(name))
+		return;
+
+	char sql[1024];
+	sprintf(sql,
+		"DROP TRIGGER %s "
+		"ON %s ",
+		name, table
+	);
+	SPI_execute(sql, false, 1);
+}
+
+
+//@ boolean xapian_create_index(text, text, text, text, text)
 extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_create_index); }
 extern "C" Datum pg_xapian_create_index(PG_FUNCTION_ARGS)
 {
-	char *path = PG_GETARG_NTSTRING(0);
+	char *name = PG_GETARG_NTSTRING(0);
+	char *path = PG_GETARG_NTSTRING(1);
+	char *table = PG_GETARG_NTSTRING(2);
+	char *doc_id_field = PG_GETARG_NTSTRING(3);
+	char *doc_data_field = PG_GETARG_NTSTRING(4);
+	char sql[1024];
+	char trigger_name[64];
+	SPI_connect();
 	
+	// create the xapian_index table
+	xapian_create_system_tables();
+	
+	// create the database
 	XAPIAN_CATCH_BEGIN
 		Xapian::WritableDatabase database(path, Xapian::DB_CREATE_OR_OPEN);
 	XAPIAN_CATCH_END
 	
+	// register the index
+	sprintf(sql,
+		"INSERT INTO xapian_index (name, path, table_name, table_id, table_data) "
+		"VALUES ('%s', '%s', '%s', '%s', '%s')",
+		name, path, table, doc_id_field, doc_data_field
+	);
+	SPI_execute(sql, false, 1);
+	
+	// INSERT trigger
+	sprintf(sql,
+		"CREATE OR REPLACE FUNCTION %s_insert_trigger() RETURNS TRIGGER AS $$\n"
+		"BEGIN\n"
+		"  NEW.%s := xapian_add_document('%s'::text, NEW.%s::text);\n"
+		"  RETURN NEW;\n"
+		"END;\n"
+		"$$ LANGUAGE PLPGSQL",
+		name, doc_id_field, name, doc_data_field
+	);
+	SPI_execute(sql, false, 1);
+	
+	sprintf(trigger_name, "%s_trigger_insert", name);
+	xapian_drop_trigger(trigger_name, table);
+	sprintf(sql,
+		"CREATE TRIGGER %s "
+		"BEFORE INSERT ON %s "
+		"FOR EACH ROW EXECUTE PROCEDURE %s_insert_trigger()",
+		trigger_name, table, name
+	);
+	SPI_execute(sql, false, 1);
+	
+	// success
+	SPI_finish();
 	PG_RETURN_BOOL(true);
 }
 
@@ -85,24 +226,21 @@ extern "C" Datum pg_xapian_create_index(PG_FUNCTION_ARGS)
 extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_add_document); }
 extern "C" Datum pg_xapian_add_document(PG_FUNCTION_ARGS)
 {
-	char *path = PG_GETARG_NTSTRING(0);
-	char *data = PG_GETARG_NTSTRING(0);
+	char *name = PG_GETARG_NTSTRING(0);
+	char *data = PG_GETARG_NTSTRING(1);
+	SPI_connect();
+	char *path = xapian_get_index_path(name);
+	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
 		// open the database
 		Xapian::WritableDatabase database(path, Xapian::DB_OPEN);
 		
-		// create the document
+		// create the document with parsed terms
 		Xapian::Document doc;
-		doc.set_data(data);
-		
-		// split the data into terms
-		doc.add_posting("a", 0);
-		doc.add_posting("cat", 1);
-		doc.add_posting("sat", 2);
-		doc.add_posting("on", 3);
-		doc.add_posting("a", 4);
-		doc.add_posting("mat", 5);
+		Xapian::TermGenerator terms;
+		terms.set_document(doc);
+		terms.index_text(data);
 		
 		// attempt to add the document
 		Xapian::docid id = database.add_document(doc);
@@ -117,7 +255,9 @@ extern "C" Datum pg_xapian_add_document(PG_FUNCTION_ARGS)
 extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_count_documents); }
 extern "C" Datum pg_xapian_count_documents(PG_FUNCTION_ARGS)
 {
-	char *path = PG_GETARG_NTSTRING(0);
+	SPI_connect();
+	char *path = xapian_get_index_path(PG_GETARG_NTSTRING(0));
+	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
 		Xapian::WritableDatabase database(path, Xapian::DB_OPEN);
@@ -135,12 +275,33 @@ typedef struct
 } xapian_document;
 
 
+/*
+
+CREATE FUNCTION xapian(index_name text, terms text)
+RETURNS SETOF xapian_document AS $$
+DECLARE
+  result xapian_document%rowtype;
+BEGIN
+  FOR result IN SELECT * FROM xapian_match(index_name, terms) as (id int, rel int) LOOP
+    RETURN NEXT result;
+  END LOOP;
+  RETURN;
+END;
+$$ LANGUAGE plpgsql;
+
+WITH results AS (select * from xapian('book_idx', 'lord'))
+SELECT id, title, relevance from results join book on book.doc_id=document_id;
+
+*/
+
+
 //@ setof record xapian_match(text, text)
-// create type xapian_document as ( document_id int, relevance int );
 extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_match); }
 extern "C" Datum pg_xapian_match(PG_FUNCTION_ARGS)
 {
-	char *path = PG_GETARG_NTSTRING(0);
+	SPI_connect();
+	char *path = xapian_get_index_path(PG_GETARG_NTSTRING(0));
+	SPI_finish();
 	char *terms = PG_GETARG_NTSTRING(1);
 	
 	XAPIAN_CATCH_BEGIN

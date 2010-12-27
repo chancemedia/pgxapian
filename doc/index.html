@@ -1,0 +1,166 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>pgXapian Documentation</title>
+<style type="text/css">
+<!--
+body {
+	font-family: Verdana, Geneva, sans-serif;
+	font-size: 12px;
+}
+-->
+</style>
+</head>
+
+<body>
+<ul>
+  <li>Introduction
+    <ul>
+      <li>About</li>
+      <li>Installation</li>
+    </ul>
+  </li>
+  <li>Indexes
+    <ul>
+      <li>Creating an index</li>
+      <li>Dropping (deleting) an index</li>
+    </ul>
+  </li>
+  <li>Searching
+    <ul>
+      <li>Basic searching</li>
+    </ul>
+  </li>
+</ul>
+<h2>Introduction </h2>
+<h3>About</h3>
+<p><a href="http://xapian.org/">Xapian</a> is an Open Source Search Engine Library. It is written in C++ released under the <a href="http://www.opensource.org/licenses/gpl-license.php">GPL</a>.</p>
+<p>pgXapian provides PL/pgSQL functions for using Xabian databases (more commonly known as indexes) with your already established PostgreSQL projects.</p>
+<h3>Installation</h3>
+<p>There are currently no binaries available.</p>
+<ol>
+  <li>Download the source &amp; uncompress if needed.</li>
+  <li>Change into the pgxapian/ directory.</li>
+  <li>Run: <tt>php install.php [options]</tt></li>
+</ol>
+<tt>[options]</tt> is the connection string you would give to <tt>psql</tt> and also specifies the database where you want the PL/pgSQL functions installed. For example if your normally connect to your PostgreSQL database with:<br />
+<br />
+<tt>$ psql -U myuser mydb</tt><br />
+<br />
+The then command to install will be:<br />
+<br />
+<tt>$ php install.php -U myuser mydb</tt>
+<h2>Indexes</h2>
+<h3>Creating an index</h3>
+<p>Creating a Xapian index is as easy as creating a native table index, you only have to run <tt>xapian_create_index()</tt> once and it will automatically add all the nessesary triggers and index the content in the table.</p>
+<p>Your table can be anything PostgreSQL allows, the only real requirement is you add an extra INT column to store the indexed document ID. For example;</p>
+<pre>CREATE TABLE book (
+  id serial primary key,
+  title text not null,
+  doc_id int
+);</pre>
+<p>Now create the Xapian index: </p>
+<pre>SELECT xapian_create_index('book_idx', '/somewhere/book_idx', 'book', 'doc_id', 'title');</pre>
+<ul>
+  <li>The first parameter is the name of the index.</li>
+  <li>The second parameter is where you would like the index stored.<br />
+  Note that your database UNIX user (not the user you log in with psql) which is usually postgres must have permission to write to the location where you want the index to be stored. Also note that the index is created as a directory, not a file.</li>
+  <li>The third parameter specifies the table name.</li>
+  <li>The forth parameter is the column where the indexed document IDs are to be stored.</li>
+  <li>The fith paramether is the column that contains the article to be indexed.</li>
+</ul>
+<p>A common error is when postgres doesn't have permission to write to the destination, you will see something like:</p>
+<pre>ERROR:  Cannot create directory `/somewhere/book_idx'
+</pre>
+<h3>Index</h3>
+<table width="100%" border="0" cellspacing="0" cellpadding="0">
+  <tr>
+    <td><tt>xapian_count_documents(index_name text)</tt></td>
+    <td><tt>FUNCTION</tt></td>
+    <td>Count all the documents in a Xapian database.</td>
+  </tr>
+  <tr>
+    <td><tt>xapian_document</tt></td>
+    <td><tt>TYPE</tt></td>
+    <td>Returned as a setof for matching documents.</td>
+  </tr>
+</table>
+<h3>Dropping (deleting) an index</h3>
+<p>To drop an index named <tt>book_idx</tt>:</p>
+<pre>SELECT xapian_drop_index('book_idx');</pre>
+<!--
+
+<p>There are times in which you may want to rebuild an index, such as after a database restore. Indexing is very simple:</p>
+<p>SELECT xapian_reindex('book_idx');</p>
+<p>Which will do:</p>
+<ol>
+  <li>Drop (delete) the physical Xapian database from the disk then recreates it.</li>
+  <li>Set the xapian_id to NULL for all records.</li>
+  <li>Index 1000 records at a time. It does this so that the table can be used while the reindex occurs.</li>
+</ol>
+<p>Some notes about reindexing:</p>
+<ul>
+  <li>Reindexing is very taxing on CPU and hard drive resources, it also means your search results will be incomplete until the table has finished recreating the index.</li>
+  <li>Rarely transactions can be rolled back that have inserted data into a table that has a Xapian index on it. If a transaction is rolled back the document will still remain in the Xapian index but not in the table. This is not normally an issue because records of a table are only returned for Xapian search results that match document IDs in the physical table, so any left over documents in the Xapian index will simply not appear if they are not valid.</li>
+  <li>You should always have a normal INDEX on your xapian_id column, this will greatly speed up the reindex and searching processes.</li>
+</ul>
+
+-->
+<h2>Searching
+</h2>
+<h3>Basic searching</h3>
+<p>Searching works by passing the search string to Xapian and it in tern returns a <tt>setof xapian_document</tt> which is a custom type containing the document ID and other statistics such as relevance. This is best explained with an example:</p>
+<pre>select * from book;</pre>
+<table border="1" cellspacing="0" cellpadding="2">
+  <tr>
+    <th>id</th>
+    <th>title</th>
+    <th>doc_id</th>
+  </tr>
+  <tr>
+    <td>1</td>
+    <td>The Da Vinci Code</td>
+    <td>1</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>The Lord of the Rings - The Return of the King</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>Harry Potter and the Half-Blood Prince</td>
+    <td>3</td>
+  </tr>
+</table>
+<pre>select id, title
+from book
+where doc_id in (select document_id from xapian('book_idx', 'lord'));</pre>
+<table border="1" cellspacing="0" cellpadding="2">
+  <tr>
+    <th>id</th>
+    <th>title</th>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>The Lord of the Rings - The Return of the King</td>
+  </tr>
+</table>
+<pre>WITH results AS (select * from xapian('book_idx', 'lord'))
+SELECT id, title, relevance from results join book on book.doc_id=document_id;</pre>
+<table border="1" cellspacing="0" cellpadding="2">
+  <tr>
+    <th>id</th>
+    <th>title</th>
+    <th>relevance</th>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>The Lord of the Rings - The Return of the King</td>
+    <td>100</td>
+  </tr>
+</table>
+<p>&nbsp;</p>
+</body>
+</html>
