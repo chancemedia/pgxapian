@@ -216,6 +216,50 @@ extern "C" Datum pg_xapian_create_index(PG_FUNCTION_ARGS)
 	);
 	SPI_execute(sql, false, 1);
 	
+	// UPDATE trigger
+	sprintf(sql,
+		"CREATE OR REPLACE FUNCTION %s_update_trigger() RETURNS TRIGGER AS $$\n"
+		"BEGIN\n"
+		"  PERFORM xapian_update_document('%s'::text, NEW.%s, NEW.%s::text);\n"
+		"  RETURN NEW;\n"
+		"END;\n"
+		"$$ LANGUAGE PLPGSQL",
+		name, name, doc_id_field, doc_data_field
+	);
+	SPI_execute(sql, false, 1);
+	
+	sprintf(trigger_name, "%s_update_insert", name);
+	xapian_drop_trigger(trigger_name, table);
+	sprintf(sql,
+		"CREATE TRIGGER %s "
+		"BEFORE UPDATE ON %s "
+		"FOR EACH ROW EXECUTE PROCEDURE %s_update_trigger()",
+		trigger_name, table, name
+	);
+	SPI_execute(sql, false, 1);
+	
+	// DELETE trigger
+	sprintf(sql,
+		"CREATE OR REPLACE FUNCTION %s_delete_trigger() RETURNS TRIGGER AS $$\n"
+		"BEGIN\n"
+		"  PERFORM xapian_delete_document('%s'::text, OLD.%s);\n"
+		"  RETURN OLD;\n"
+		"END;\n"
+		"$$ LANGUAGE PLPGSQL",
+		name, name, doc_id_field
+	);
+	SPI_execute(sql, false, 1);
+	
+	sprintf(trigger_name, "%s_delete_insert", name);
+	xapian_drop_trigger(trigger_name, table);
+	sprintf(sql,
+		"CREATE TRIGGER %s "
+		"BEFORE DELETE ON %s "
+		"FOR EACH ROW EXECUTE PROCEDURE %s_delete_trigger()",
+		trigger_name, table, name
+	);
+	SPI_execute(sql, false, 1);
+	
 	// success
 	SPI_finish();
 	PG_RETURN_BOOL(true);
@@ -245,6 +289,91 @@ extern "C" Datum pg_xapian_add_document(PG_FUNCTION_ARGS)
 		// attempt to add the document
 		Xapian::docid id = database.add_document(doc);
 		PG_RETURN_UINT32(id);
+	XAPIAN_CATCH_END
+	
+	PG_RETURN_NULL();
+}
+
+
+//@ text xapian_get_document(text, int)
+extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_get_document); }
+extern "C" Datum pg_xapian_get_document(PG_FUNCTION_ARGS)
+{
+	char *name = PG_GETARG_NTSTRING(0);
+	int doc_id = PG_GETARG_INT32(1);
+	SPI_connect();
+	char *path = xapian_get_index_path(name);
+	SPI_finish();
+	
+	XAPIAN_CATCH_BEGIN
+		// open the database
+		Xapian::WritableDatabase database(path, Xapian::DB_OPEN);
+		
+		// get the document description
+		Xapian::Document doc = database.get_document(doc_id);
+		string desc = "";
+		for(Xapian::TermIterator i = doc.termlist_begin(); i != doc.termlist_end(); ++i)
+			desc += *i + " ";
+		char *description = (char*) desc.c_str();
+		
+		text *t = (text*) palloc(VARHDRSZ + strlen(description));
+		SET_VARSIZE(t, VARHDRSZ + strlen(description));
+		memcpy(VARDATA(t), description, strlen(description));
+	    
+	    PG_RETURN_TEXT_P(t);
+	XAPIAN_CATCH_END
+	
+	PG_RETURN_NULL();
+}
+
+
+//@ boolean xapian_update_document(text, int, text)
+extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_update_document); }
+extern "C" Datum pg_xapian_update_document(PG_FUNCTION_ARGS)
+{
+	char *name = PG_GETARG_NTSTRING(0);
+	int doc_id = PG_GETARG_INT32(1);
+	char *data = PG_GETARG_NTSTRING(2);
+	SPI_connect();
+	char *path = xapian_get_index_path(name);
+	SPI_finish();
+	
+	XAPIAN_CATCH_BEGIN
+		// open the database
+		Xapian::WritableDatabase database(path, Xapian::DB_OPEN);
+		
+		// create the document with parsed terms
+		Xapian::Document doc;
+		Xapian::TermGenerator terms;
+		terms.set_document(doc);
+		terms.index_text(data);
+		
+		// attempt to update the document
+		database.replace_document(doc_id, doc);
+		PG_RETURN_BOOL(true);
+	XAPIAN_CATCH_END
+	
+	PG_RETURN_NULL();
+}
+
+
+//@ boolean xapian_delete_document(text, int)
+extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_delete_document); }
+extern "C" Datum pg_xapian_delete_document(PG_FUNCTION_ARGS)
+{
+	char *name = PG_GETARG_NTSTRING(0);
+	int doc_id = PG_GETARG_INT32(1);
+	SPI_connect();
+	char *path = xapian_get_index_path(name);
+	SPI_finish();
+	
+	XAPIAN_CATCH_BEGIN
+		// open the database
+		Xapian::WritableDatabase database(path, Xapian::DB_OPEN);
+		
+		// attempt to delete the document
+		database.delete_document(doc_id);
+		PG_RETURN_BOOL(true);
 	XAPIAN_CATCH_END
 	
 	PG_RETURN_NULL();

@@ -3,14 +3,13 @@ install.php
 
 xapian.cpp
   - xapian_match() must split up the terms.
-  - Create xapian_update_document().
-  - Create xapian_delete_document().
-  - Add UPDATE and DELETE triggers when creating an index.
+  - xapian_drop_index() needs to set all doc_ids to NULL.
   - When creating an index scan through to find NULL document_ids and index them.
   - Add xapian_reindex().
   - xapian_drop_index() needs to remove the triggers.
   - Raise exception when xapian_create_index() name collides with an already present index.
   - Raise exception when using any index function with an index that does not exist.
+  - Fix up the XAPIAN_CATCH_END to give more useful error messages.
   - xapian_document.relevance should be float?
 
 Documentation
