@@ -68,40 +68,15 @@ extern "C" Datum pg_xapian_version(PG_FUNCTION_ARGS)
 }
 
 
-char *xapian_get_index_path(char *name)
+char *xapian_get_index_attr(char *name, char *attr)
 {
 	char sql[256];
-	sprintf(sql, "SELECT path FROM xapian_index WHERE name='%s'", name);
+	sprintf(sql, "SELECT %s FROM xapian_index WHERE name='%s'", attr, name);
 	if(SPI_execute(sql, true, 1) != SPI_OK_SELECT) {
 		elog(ERROR, "\"%s\" failed", SPI_tuptable->alloced);
 		return NULL;
 	}
 	return SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
-}
-
-
-//@ void xapian_drop_index(text)
-extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_drop_index); }
-extern "C" Datum pg_xapian_drop_index(PG_FUNCTION_ARGS)
-{
-	char *name = PG_GETARG_NTSTRING(0);
-	char sql[1024];
-	SPI_connect();
-	
-	// we need the path before we remove the index
-	char *path = xapian_get_index_path(name);
-	
-	// drop index entry
-	sprintf(sql, "DELETE FROM xapian_index WHERE name='%s'", name);
-	SPI_execute(sql, false, 1);
-	
-	// delete data files
-	sprintf(sql, "rm -Rf \"%s\"", path);
-	system(sql);
-	
-	// clean up
-	SPI_finish();
-	PG_RETURN_NULL();
 }
 
 
@@ -129,6 +104,69 @@ int xapian_table_exists(char *table)
 }
 
 
+void xapian_drop_trigger(char *name, char *table)
+{
+	if(!xapian_trigger_exists(name))
+		return;
+
+	char sql[1024];
+	sprintf(sql,
+		"DROP TRIGGER %s "
+		"ON %s ",
+		name, table
+	);
+	SPI_execute(sql, false, 1);
+}
+
+
+//@ void xapian_drop_index(text)
+extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_drop_index); }
+extern "C" Datum pg_xapian_drop_index(PG_FUNCTION_ARGS)
+{
+	char *name = PG_GETARG_NTSTRING(0);
+	char sql[1024];
+	char trigger_name[64];
+	SPI_connect();
+	
+	// we need some index attributes before we remove the index
+	char *path = xapian_get_index_attr(name, (char*) "path");
+	char *table_name = xapian_get_index_attr(name, (char*) "table_name");
+	char *table_id = xapian_get_index_attr(name, (char*) "table_id");
+	
+	// drop index entry
+	sprintf(sql, "DELETE FROM xapian_index WHERE name='%s'", name);
+	SPI_execute(sql, false, 1);
+	
+	// update doc_ids to NULL
+	sprintf(sql, "UPDATE %s SET %s=NULL", table_name, table_id);
+	SPI_execute(sql, false, 1);
+	
+	// remove functions
+	sprintf(sql, "DROP FUNCTION %s_insert_trigger() CASCADE", name);
+	SPI_execute(sql, false, 1);
+	sprintf(sql, "DROP FUNCTION %s_update_trigger() CASCADE", name);
+	SPI_execute(sql, false, 1);
+	sprintf(sql, "DROP FUNCTION %s_delete_trigger() CASCADE", name);
+	SPI_execute(sql, false, 1);
+	
+	// remove triggers
+	/*sprintf(trigger_name, "%s_trigger_insert", name);
+	xapian_drop_trigger(trigger_name, table_name);
+	sprintf(trigger_name, "%s_trigger_update", name);
+	xapian_drop_trigger(trigger_name, table_name);
+	sprintf(trigger_name, "%s_trigger_delete", name);
+	xapian_drop_trigger(trigger_name, table_name);*/
+	
+	// delete data files
+	sprintf(sql, "rm -Rf \"%s\"", path);
+	system(sql);
+	
+	// clean up
+	SPI_finish();
+	PG_RETURN_NULL();
+}
+
+
 void xapian_create_system_tables()
 {
 	// check if the tables already exist
@@ -147,21 +185,6 @@ void xapian_create_system_tables()
 	SPI_execute(
 		"CREATE UNIQUE INDEX xapian_index_name ON xapian_index (name)",
 	false, 1);
-}
-
-
-void xapian_drop_trigger(char *name, char *table)
-{
-	if(!xapian_trigger_exists(name))
-		return;
-
-	char sql[1024];
-	sprintf(sql,
-		"DROP TRIGGER %s "
-		"ON %s ",
-		name, table
-	);
-	SPI_execute(sql, false, 1);
 }
 
 
@@ -273,7 +296,7 @@ extern "C" Datum pg_xapian_add_document(PG_FUNCTION_ARGS)
 	char *name = PG_GETARG_NTSTRING(0);
 	char *data = PG_GETARG_NTSTRING(1);
 	SPI_connect();
-	char *path = xapian_get_index_path(name);
+	char *path = xapian_get_index_attr(name, (char*) "path");
 	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
@@ -302,7 +325,7 @@ extern "C" Datum pg_xapian_get_document(PG_FUNCTION_ARGS)
 	char *name = PG_GETARG_NTSTRING(0);
 	int doc_id = PG_GETARG_INT32(1);
 	SPI_connect();
-	char *path = xapian_get_index_path(name);
+	char *path = xapian_get_index_attr(name, (char*) "path");
 	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
@@ -335,7 +358,7 @@ extern "C" Datum pg_xapian_update_document(PG_FUNCTION_ARGS)
 	int doc_id = PG_GETARG_INT32(1);
 	char *data = PG_GETARG_NTSTRING(2);
 	SPI_connect();
-	char *path = xapian_get_index_path(name);
+	char *path = xapian_get_index_attr(name, (char*) "path");
 	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
@@ -364,7 +387,7 @@ extern "C" Datum pg_xapian_delete_document(PG_FUNCTION_ARGS)
 	char *name = PG_GETARG_NTSTRING(0);
 	int doc_id = PG_GETARG_INT32(1);
 	SPI_connect();
-	char *path = xapian_get_index_path(name);
+	char *path = xapian_get_index_attr(name, (char*) "path");
 	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
@@ -385,7 +408,7 @@ extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_count_documents); }
 extern "C" Datum pg_xapian_count_documents(PG_FUNCTION_ARGS)
 {
 	SPI_connect();
-	char *path = xapian_get_index_path(PG_GETARG_NTSTRING(0));
+	char *path = xapian_get_index_attr(PG_GETARG_NTSTRING(0), (char*) "path");
 	SPI_finish();
 	
 	XAPIAN_CATCH_BEGIN
@@ -409,7 +432,7 @@ extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_match); }
 extern "C" Datum pg_xapian_match(PG_FUNCTION_ARGS)
 {
 	SPI_connect();
-	char *path = xapian_get_index_path(PG_GETARG_NTSTRING(0));
+	char *path = xapian_get_index_attr(PG_GETARG_NTSTRING(0), (char*) "path");
 	SPI_finish();
 	char *terms = PG_GETARG_NTSTRING(1);
 	

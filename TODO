@@ -3,10 +3,8 @@ install.php
 
 xapian.cpp
   - xapian_match() must split up the terms.
-  - xapian_drop_index() needs to set all doc_ids to NULL.
   - When creating an index scan through to find NULL document_ids and index them.
   - Add xapian_reindex().
-  - xapian_drop_index() needs to remove the triggers.
   - Raise exception when xapian_create_index() name collides with an already present index.
   - Raise exception when using any index function with an index that does not exist.
   - Fix up the XAPIAN_CATCH_END to give more useful error messages.
