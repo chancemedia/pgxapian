@@ -18,8 +18,9 @@ system("g++ -shared -o pgxapian.so -fPIC -luuid xapian.cpp xapian-core/.libs/lib
 // clean object files
 system("rm -f *.o");
 
-// SQL types
-system("psql $options -c \"create type xapian_document as ( document_id int, relevance int );\"");
+// install SQL functions and types
+system("psql $options -f \"xapian.sql\"");
+system("psql $options -c \"select xapian_install();\"");
 
 // load SQL
 echo "Installing functions...\n";

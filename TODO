@@ -1,8 +1,8 @@
 install.php
-  - "CREATE TYPE xapian_document" complains when it already exists.
-  - Add "CREATE FUNCTION xapian" on install.
+  - A way to uninstall.
 
 xapian.cpp
+  - xapian_match() must split up the terms.
   - Create xapian_update_document().
   - Create xapian_delete_document().
   - Add UPDATE and DELETE triggers when creating an index.
@@ -15,6 +15,7 @@ xapian.cpp
 
 Documentation
   - Fix up doc/index.html with contents and object index.
+  - Add README.
 
 SQL
   - xapian() needs a synomymous function to specify a limit of results.

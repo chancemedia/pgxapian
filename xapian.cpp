@@ -275,23 +275,6 @@ typedef struct
 } xapian_document;
 
 
-/*
-
-CREATE FUNCTION xapian(index_name text, terms text)
-RETURNS SETOF xapian_document AS $$
-DECLARE
-  result xapian_document%rowtype;
-BEGIN
-  FOR result IN SELECT * FROM xapian_match(index_name, terms) as (id int, rel int) LOOP
-    RETURN NEXT result;
-  END LOOP;
-  RETURN;
-END;
-$$ LANGUAGE plpgsql;
-
-*/
-
-
 //@ setof record xapian_match(text, text)
 extern "C" { PG_FUNCTION_INFO_V1(pg_xapian_match); }
 extern "C" Datum pg_xapian_match(PG_FUNCTION_ARGS)
